@@ -7,7 +7,7 @@ on:
 env:
   DOCKERHUB_USERNAME: abishnev
   DOCKERHUB_TOKEN: visionplus@9947
-  IMAGE_NAME: your-dockerhub-abishnev/flask-app  # Replace with your Docker Hub repository
+  IMAGE_NAME: your-dockerhub-username/flask-app  # Update with your Docker Hub repo
 
 jobs:
   build-and-push:
@@ -17,55 +17,70 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify Flask app structure
+      - name: Find Flask application file
+        id: find-flask-app
         run: |
-          if [ ! -f app.py ] && [ ! -f wsgi.py ]; then
-            echo "Error: No Flask application file found (app.py or wsgi.py)"
-            exit 1
+          # Search for common Flask app filenames
+          if [ -f app.py ]; then
+            echo "Found app.py"
+            echo "FLASK_APP=app.py" >> $GITHUB_ENV
+          elif [ -f wsgi.py ]; then
+            echo "Found wsgi.py"
+            echo "FLASK_APP=wsgi.py" >> $GITHUB_ENV
+          elif [ -f application.py ]; then
+            echo "Found application.py"
+            echo "FLASK_APP=application.py" >> $GITHUB_ENV
+          else
+            echo "::warning::No standard Flask app file found (looking for app.py, wsgi.py, or application.py)"
+            # Try to find Python files that might contain Flask app
+            APP_FILE=$(find . -name "*.py" -exec grep -l "Flask(__name__)" {} + | head -1)
+            if [ -n "$APP_FILE" ]; then
+              echo "Found Flask app in: $APP_FILE"
+              echo "FLASK_APP=${APP_FILE#./}" >> $GITHUB_ENV
+            else
+              echo "::error::Could not find any Flask application file"
+              echo "Please ensure your repository contains a Flask application"
+              echo "Either create an app.py or specify the main module in requirements.txt"
+              exit 1
+            fi
           fi
-          echo "Flask app structure verified"
 
       - name: Create Dockerfile
         run: |
           cat <<'DOCKERFILE' > Dockerfile
-          # Flask Production Dockerfile
           FROM python:3.9-slim
           
-          # Set environment variables
           ENV PYTHONDONTWRITEBYTECODE=1 \
               PYTHONUNBUFFERED=1 \
-              FLASK_APP=app.py \
+              FLASK_APP=${{ env.FLASK_APP }} \
               FLASK_ENV=production
           
           WORKDIR /app
           
-          # Install system dependencies
           RUN apt-get update && \
               apt-get install -y --no-install-recommends gcc python3-dev && \
               rm -rf /var/lib/apt/lists/*
           
-          # Install Python dependencies
           COPY requirements.txt .
           RUN pip install --no-cache-dir --upgrade pip && \
               pip install --no-cache-dir -r requirements.txt
           
-          # Copy application
           COPY . .
           
           EXPOSE 5000
           
-          CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "app:app"]
+          CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "${{ env.FLASK_APP%%.py }}:app"]
           DOCKERFILE
           
-          # Create default requirements if missing
+          # Create default requirements.txt if missing
           if [ ! -f requirements.txt ]; then
             echo "Creating default requirements.txt"
             echo -e "flask\ngunicorn" > requirements.txt
           fi
           
-          echo "Dockerfile created successfully"
+          echo "=== Generated Dockerfile ==="
           cat Dockerfile
-          echo -e "\nRequirements:"
+          echo -e "\n=== Requirements ==="
           cat requirements.txt
 
       - name: Set up Docker Buildx
@@ -82,18 +97,13 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          labels: |
-            org.opencontainers.image.source=${{ github.repository_url }}
-            org.opencontainers.image.version=${{ github.ref_name }}
-            org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Verify pushed image
+      - name: Success
         run: |
-          echo "Image successfully pushed to:"
-          echo "${{ env.IMAGE_NAME }}:latest"
-          echo "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Successfully built and pushed Docker image"
+          echo "Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
