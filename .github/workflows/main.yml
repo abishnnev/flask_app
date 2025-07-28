@@ -5,9 +5,7 @@ on:
     branches: [main, master]
 
 env:
-  DOCKERHUB_USERNAME: abishnev
-  DOCKERHUB_TOKEN: visionplus@9947
-  IMAGE_NAME: your-dockerhub-username/flask-app  # Update with your Docker Hub repo
+  IMAGE_NAME: abishnev/flask-app  # Your Docker Hub repository name
 
 jobs:
   build-and-push:
@@ -17,93 +15,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Find Flask application file
-        id: find-flask-app
-        run: |
-          # Search for common Flask app filenames
-          if [ -f app.py ]; then
-            echo "Found app.py"
-            echo "FLASK_APP=app.py" >> $GITHUB_ENV
-          elif [ -f wsgi.py ]; then
-            echo "Found wsgi.py"
-            echo "FLASK_APP=wsgi.py" >> $GITHUB_ENV
-          elif [ -f application.py ]; then
-            echo "Found application.py"
-            echo "FLASK_APP=application.py" >> $GITHUB_ENV
-          else
-            echo "::warning::No standard Flask app file found (looking for app.py, wsgi.py, or application.py)"
-            # Try to find Python files that might contain Flask app
-            APP_FILE=$(find . -name "*.py" -exec grep -l "Flask(__name__)" {} + | head -1)
-            if [ -n "$APP_FILE" ]; then
-              echo "Found Flask app in: $APP_FILE"
-              echo "FLASK_APP=${APP_FILE#./}" >> $GITHUB_ENV
-            else
-              echo "::error::Could not find any Flask application file"
-              echo "Please ensure your repository contains a Flask application"
-              echo "Either create an app.py or specify the main module in requirements.txt"
-              exit 1
-            fi
-          fi
-
-      - name: Create Dockerfile
-        run: |
-          cat <<'DOCKERFILE' > Dockerfile
-          FROM python:3.9-slim
-          
-          ENV PYTHONDONTWRITEBYTECODE=1 \
-              PYTHONUNBUFFERED=1 \
-              FLASK_APP=${{ env.FLASK_APP }} \
-              FLASK_ENV=production
-          
-          WORKDIR /app
-          
-          RUN apt-get update && \
-              apt-get install -y --no-install-recommends gcc python3-dev && \
-              rm -rf /var/lib/apt/lists/*
-          
-          COPY requirements.txt .
-          RUN pip install --no-cache-dir --upgrade pip && \
-              pip install --no-cache-dir -r requirements.txt
-          
-          COPY . .
-          
-          EXPOSE 5000
-          
-          CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "${{ env.FLASK_APP%%.py }}:app"]
-          DOCKERFILE
-          
-          # Create default requirements.txt if missing
-          if [ ! -f requirements.txt ]; then
-            echo "Creating default requirements.txt"
-            echo -e "flask\ngunicorn" > requirements.txt
-          fi
-          
-          echo "=== Generated Dockerfile ==="
-          cat Dockerfile
-          echo -e "\n=== Requirements ==="
-          cat requirements.txt
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: abishnev
-          password: visionplus@9947
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-      - name: Success
-        run: |
-          echo "Successfully built and pushed Docker image"
-          echo "Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
